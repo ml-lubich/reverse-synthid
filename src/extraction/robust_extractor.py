@@ -477,10 +477,21 @@ class RobustSynthIDExtractor:
         """
         # Extract noise from all images
         noise_vectors = []
-        target_size = 512
+        # Use a consistent analysis size; cap at 512 for ICA memory
+        if images:
+            native_h, native_w = images[0].shape[:2]
+            max_dim = 512
+            if native_h > max_dim or native_w > max_dim:
+                scale = max_dim / max(native_h, native_w)
+                target_h = int(native_h * scale)
+                target_w = int(native_w * scale)
+            else:
+                target_h, target_w = native_h, native_w
+        else:
+            target_h = target_w = 512
         
         for img in images[:50]:  # Limit for performance
-            img_resized = cv2.resize(img, (target_size, target_size))
+            img_resized = cv2.resize(img, (target_w, target_h))
             noise = self.extract_noise_fused(img_resized)
             
             if len(noise.shape) == 3:
@@ -504,24 +515,27 @@ class RobustSynthIDExtractor:
         # Find the most consistent component (watermark)
         consistencies = []
         for i in range(n_components):
-            component = components[i].reshape(target_size, target_size)
+            component = components[i].reshape(target_h, target_w)
             # Watermark should have specific frequency structure
             f = fftshift(fft2(component))
             
-            # Check energy at known carrier frequencies
-            center = target_size // 2
+            # Check energy at known carrier frequencies (scaled to analysis size)
+            center_y = target_h // 2
+            center_x = target_w // 2
+            scale_y = target_h / 512
+            scale_x = target_w / 512
             carrier_energy = 0
             for freq_y, freq_x in self.known_carriers:
-                y = freq_y + center
-                x = freq_x + center
-                if 0 <= y < target_size and 0 <= x < target_size:
+                y = int(freq_y * scale_y) + center_y
+                x = int(freq_x * scale_x) + center_x
+                if 0 <= y < target_h and 0 <= x < target_w:
                     carrier_energy += np.abs(f[y, x])
             
             consistencies.append(carrier_energy)
         
         # Return the component with highest carrier energy
         best_idx = np.argmax(consistencies)
-        watermark = components[best_idx].reshape(target_size, target_size)
+        watermark = components[best_idx].reshape(target_h, target_w)
         
         return watermark
     
@@ -564,11 +578,16 @@ class RobustSynthIDExtractor:
         
         # Extract reference noise pattern
         print("Extracting reference noise pattern...")
-        target_size = 512
-        noise_sum = np.zeros((target_size, target_size, 3), dtype=np.float64)
+        # Use native resolution of first image instead of fixed 512
+        if images:
+            target_h, target_w = images[0].shape[:2]
+        else:
+            target_h = target_w = 512
+        target_size = max(target_h, target_w)  # for carrier normalization
+        noise_sum = np.zeros((target_h, target_w, 3), dtype=np.float64)
         
         for img in images:
-            img_resized = cv2.resize(img, (target_size, target_size))
+            img_resized = cv2.resize(img, (target_w, target_h))
             noise = self.extract_noise_fused(img_resized)
             noise_sum += noise
         
@@ -586,8 +605,8 @@ class RobustSynthIDExtractor:
         for i, img1 in enumerate(sample_images):
             for j, img2 in enumerate(sample_images):
                 if i < j:
-                    img1_resized = cv2.resize(img1, (target_size, target_size))
-                    img2_resized = cv2.resize(img2, (target_size, target_size))
+                    img1_resized = cv2.resize(img1, (target_w, target_h))
+                    img2_resized = cv2.resize(img2, (target_w, target_h))
                     
                     noise1 = self.extract_noise_fused(img1_resized)
                     noise2 = self.extract_noise_fused(img2_resized)
@@ -612,7 +631,7 @@ class RobustSynthIDExtractor:
             'source': 'Gemini/SynthID',
             'extractor': 'RobustSynthIDExtractor',
             'n_images_analyzed': len(images),
-            'image_size': target_size,
+            'image_size': (target_h, target_w),
             'scales_used': self.scales,
             
             # Reference patterns
@@ -668,9 +687,15 @@ class RobustSynthIDExtractor:
         if self.codebook is None:
             raise ValueError("No codebook loaded. Call extract_codebook() or load_codebook() first.")
 
-        target_size = self.codebook['image_size']
-        img_resized = cv2.resize(image, (target_size, target_size))
-        center = target_size // 2
+        # Support both legacy scalar (512) and new tuple (h, w) image_size
+        img_size = self.codebook['image_size']
+        if isinstance(img_size, (list, tuple)):
+            target_h, target_w = int(img_size[0]), int(img_size[1])
+        else:
+            target_h = target_w = int(img_size)
+        img_resized = cv2.resize(image, (target_w, target_h))
+        center_y = target_h // 2
+        center_x = target_w // 2
 
         # ------------------------------------------------------------------
         # Image-domain FFT (grayscale)
@@ -698,8 +723,8 @@ class RobustSynthIDExtractor:
 
             phase_matches = []
             for i, (fy, fx) in enumerate(carriers):
-                y, x = fy + center, fx + center
-                if 0 <= y < target_size and 0 <= x < target_size and i < len(ref_phases):
+                y, x = fy + center_y, fx + center_x
+                if 0 <= y < target_h and 0 <= x < target_w and i < len(ref_phases):
                     diff = np.abs(np.angle(np.exp(1j * (img_phase[y, x] - ref_phases[i]))))
                     phase_matches.append(1 - diff / np.pi)
 
@@ -724,6 +749,12 @@ class RobustSynthIDExtractor:
         # Noise-domain carrier-vs-random ratio (supporting signal)
         # ------------------------------------------------------------------
         ref_noise = self.codebook['reference_noise']
+        # Resize ref_noise to match target if needed
+        if ref_noise.shape[0] != target_h or ref_noise.shape[1] != target_w:
+            ref_noise_resized = cv2.resize(ref_noise.astype(np.float32),
+                                           (target_w, target_h))
+        else:
+            ref_noise_resized = ref_noise
         noise = self.extract_noise_fused(img_resized)
         noise_gray = np.mean(noise, axis=2) if len(noise.shape) == 3 else noise
         f_noise = fftshift(fft2(noise_gray))
@@ -731,16 +762,16 @@ class RobustSynthIDExtractor:
 
         all_carriers = self.carriers_dark + self.carriers_white
         carrier_mags = [
-            noise_mag[fy + center, fx + center]
+            noise_mag[fy + center_y, fx + center_x]
             for fy, fx in all_carriers
-            if 0 <= fy + center < target_size and 0 <= fx + center < target_size
+            if 0 <= fy + center_y < target_h and 0 <= fx + center_x < target_w
         ]
 
         rng = np.random.RandomState(42)
         random_mags = []
         for _ in range(len(all_carriers) * 4):
-            ry, rx = rng.randint(10, target_size - 10), rng.randint(10, target_size - 10)
-            if abs(ry - center) < 5 and abs(rx - center) < 5:
+            ry, rx = rng.randint(10, target_h - 10), rng.randint(10, target_w - 10)
+            if abs(ry - center_y) < 5 and abs(rx - center_x) < 5:
                 continue
             random_mags.append(noise_mag[ry, rx])
 
@@ -750,12 +781,12 @@ class RobustSynthIDExtractor:
         # Legacy metrics (for reporting / backward compat)
         # ------------------------------------------------------------------
         structure_ratio = float(np.std(noise_gray) / (np.mean(np.abs(noise_gray)) + 1e-10))
-        correlation = float(np.corrcoef(noise.ravel(), ref_noise.ravel())[0, 1])
+        correlation = float(np.corrcoef(noise.ravel(), ref_noise_resized.ravel())[0, 1])
 
         carrier_mags_img = [
-            img_mag[fy + center, fx + center]
+            img_mag[fy + center_y, fx + center_x]
             for fy, fx in all_carriers
-            if 0 <= fy + center < target_size and 0 <= fx + center < target_size
+            if 0 <= fy + center_y < target_h and 0 <= fx + center_x < target_w
         ]
         avg_carrier_strength = float(np.mean(carrier_mags_img)) if carrier_mags_img else 0.0
 
