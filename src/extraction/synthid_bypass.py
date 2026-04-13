@@ -1795,6 +1795,7 @@ class SpectralCodebook:
         self,
         image_dir: str,
         max_images: int = None,
+        group_by_resolution: bool = False,
     ):
         """
         Build a profile from diverse watermarked images at native resolution.
@@ -1804,14 +1805,33 @@ class SpectralCodebook:
         ``avg_magnitude × coherence²``.
 
         The profile is stored at the native resolution of the images.
+
+        When *group_by_resolution* is True, images of different resolutions
+        within the same directory are automatically grouped and a separate
+        profile is built for each resolution.
         """
         files = self._list_reference_images(image_dir, max_images)
         if not files:
             raise ValueError(f"No images in {image_dir}")
 
-        build_shape = self._image_shape(files[0])
-        print(f"[watermarked] {len(files)} images  resolution={build_shape}")
+        if group_by_resolution:
+            groups = {}
+            for fp in files:
+                shape = self._image_shape(fp)
+                if shape is not None:
+                    groups.setdefault(shape, []).append(fp)
+            print(f"[watermarked] {len(files)} images across "
+                  f"{len(groups)} resolution(s)")
+            for shape, group_files in sorted(groups.items()):
+                self._build_watermarked_profile(shape, group_files)
+        else:
+            build_shape = self._image_shape(files[0])
+            print(f"[watermarked] {len(files)} images  "
+                  f"resolution={build_shape}")
+            self._build_watermarked_profile(build_shape, files)
 
+    def _build_watermarked_profile(self, build_shape, files):
+        """Build a single watermarked-image profile at *build_shape*."""
         mag_sum = phase_unit_sum = None
         n = 0
         for i, fp in enumerate(files):
@@ -1828,6 +1848,10 @@ class SpectralCodebook:
             if (i + 1) % 10 == 0:
                 print(f"  {i + 1}/{len(files)}")
             del m, u, img
+
+        if n == 0:
+            print(f"  WARNING: No valid images for {build_shape}")
+            return
 
         avg_mag = mag_sum / n
         pv = phase_unit_sum / n
@@ -2222,6 +2246,8 @@ if __name__ == '__main__':
     bp.add_argument('--white', help='White reference images directory')
     bp.add_argument('--watermarked', nargs='+', default=[],
                     help='Watermarked image dirs (one profile per dir)')
+    bp.add_argument('--group-by-resolution', action='store_true',
+                    help='Auto-group images by resolution within each dir')
     bp.add_argument('--output', required=True, help='Output .npz path')
 
     # --- bypass ---
@@ -2253,7 +2279,8 @@ if __name__ == '__main__':
             codebook.extract_from_references(
                 args.black, white_dir=args.white)
         for d in args.watermarked:
-            codebook.build_from_watermarked(d)
+            codebook.build_from_watermarked(
+                d, group_by_resolution=args.group_by_resolution)
         if not codebook.profiles:
             parser.error("Provide --black and/or --watermarked directories")
         os.makedirs(os.path.dirname(args.output) or '.', exist_ok=True)

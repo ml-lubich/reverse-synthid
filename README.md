@@ -73,6 +73,17 @@ Dataset: [huggingface.co/datasets/aoxo/reverse-synthid](https://huggingface.co/d
 
 Unlike brute-force approaches (JPEG compression, noise injection), our V3 bypass uses a **multi-resolution SpectralCodebook** - a collection of per-resolution watermark fingerprints stored in a single file. At bypass time, the codebook auto-selects the matching resolution profile, enabling surgical frequency-bin-level removal on any image size.
 
+### Resolution Flexibility
+
+Every component in this project works at **native image resolution** — no fixed 512×512 assumption:
+
+- **SpectralCodebook** stores per-resolution profiles and auto-selects the best match at bypass time
+- **`build_from_watermarked(..., group_by_resolution=True)`** auto-groups mixed-resolution directories into separate profiles
+- **Detection** (`robust_extractor.py`, `synthid_codebook_extractor.py`) auto-detects resolution from codebook and scales accordingly
+- **Analysis** scripts (`deep_synthid_analysis.py`, `synthid_codebook_finder.py`) default to native resolution
+- **Reference generation** covers 9 aspect ratios (1:1, 9:16, 16:9, 4:3, 3:4, 2:3, 3:2, 1:2, 2:1)
+- Existing codebooks are backward-compatible — no need to regenerate
+
 ---
 
 ## Key Findings
@@ -200,6 +211,15 @@ python src/extraction/synthid_bypass.py build-codebook \
     --output artifacts/spectral_codebook_v3.npz
 ```
 
+If your watermarked directory contains images of **mixed resolutions**, use `--group-by-resolution` to automatically create a separate profile for each resolution:
+
+```bash
+python src/extraction/synthid_bypass.py build-codebook \
+    --watermarked gemini_mixed_dir \
+    --group-by-resolution \
+    --output artifacts/spectral_codebook_v3.npz
+```
+
 Or from Python:
 
 ```python
@@ -207,17 +227,20 @@ from src.extraction.synthid_bypass import SpectralCodebook
 
 codebook = SpectralCodebook()
 
-# Profile 1: from black/white reference images (1024x1024)
+# Profile 1: from black/white reference images (auto-detects resolution)
 codebook.extract_from_references(
     black_dir='gemini_black',
     white_dir='gemini_white',
 )
 
-# Profile 2: from watermarked content images (1536x2816)
+# Profile 2: from watermarked content images (auto-detects resolution)
 codebook.build_from_watermarked('gemini_random')
 
+# Or auto-group mixed-resolution images into separate profiles:
+codebook.build_from_watermarked('gemini_mixed', group_by_resolution=True)
+
 codebook.save('artifacts/spectral_codebook_v3.npz')
-# Saved with profiles: [1024x1024, 1536x2816]
+# Saved with profiles: [1024x1024, 1536x2816, ...]
 ```
 
 ### 2. Run V3 Bypass (Any Resolution)
