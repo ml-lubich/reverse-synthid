@@ -41,14 +41,18 @@ def wavelet_denoise(channel, wavelet='db4', level=3):
     return denoised[:channel.shape[0], :channel.shape[1]]
 
 
-def extract_codebook(image_dir, output_path, max_images=250, size=512):
-    """Extract SynthID codebook from a collection of watermarked images."""
+def extract_codebook(image_dir, output_path, max_images=250, size=None):
+    """Extract SynthID codebook from a collection of watermarked images.
+    
+    If size is None, uses the native resolution of the first image found.
+    """
     
     print(f"Loading images from {image_dir}...")
     
     # Load images
     extensions = {'.png', '.jpg', '.jpeg', '.webp'}
     images = []
+    native_h, native_w = None, None
     
     for fname in sorted(os.listdir(image_dir)):
         if os.path.splitext(fname)[1].lower() in extensions:
@@ -56,7 +60,12 @@ def extract_codebook(image_dir, output_path, max_images=250, size=512):
             img = cv2.imread(path)
             if img is not None:
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                img = cv2.resize(img, (size, size))
+                if native_h is None:
+                    native_h, native_w = img.shape[:2]
+                    if size is not None:
+                        native_h = native_w = size
+                    print(f"  Using resolution: {native_h}x{native_w}")
+                img = cv2.resize(img, (native_w, native_h))
                 images.append(img)
                 if len(images) >= max_images:
                     break
@@ -69,7 +78,7 @@ def extract_codebook(image_dir, output_path, max_images=250, size=512):
     # ================================================================
     print("Extracting reference noise pattern...")
     
-    noise_sum = np.zeros((size, size, 3), dtype=np.float64)
+    noise_sum = np.zeros((native_h, native_w, 3), dtype=np.float64)
     
     for img in images:
         img_f = img.astype(np.float32) / 255.0
@@ -112,10 +121,11 @@ def extract_codebook(image_dir, output_path, max_images=250, size=512):
     carrier_mask = combined_score > threshold
     carrier_locs = np.where(carrier_mask)
     
-    center = size // 2
+    center_y = native_h // 2
+    center_x = native_w // 2
     carriers = []
     for y, x in zip(carrier_locs[0], carrier_locs[1]):
-        freq_y, freq_x = y - center, x - center
+        freq_y, freq_x = y - center_y, x - center_x
         # Skip DC
         if abs(freq_y) < 5 and abs(freq_x) < 5:
             continue
@@ -142,8 +152,8 @@ def extract_codebook(image_dir, output_path, max_images=250, size=512):
             img1 = images[i].astype(np.float32) / 255.0
             img2 = images[j].astype(np.float32) / 255.0
             
-            noise1 = np.zeros((size, size, 3))
-            noise2 = np.zeros((size, size, 3))
+            noise1 = np.zeros((native_h, native_w, 3))
+            noise2 = np.zeros((native_h, native_w, 3))
             
             for c in range(3):
                 noise1[:, :, c] = img1[:, :, c] - wavelet_denoise(img1[:, :, c])
@@ -167,7 +177,7 @@ def extract_codebook(image_dir, output_path, max_images=250, size=512):
         'version': '1.0',
         'source': 'Gemini/SynthID',
         'n_images_analyzed': len(images),
-        'image_size': size,
+        'image_size': (native_h, native_w),
         
         # Reference patterns
         'reference_noise': reference_noise,
@@ -246,12 +256,16 @@ def detect_synthid(image_path, codebook_path):
         return {'error': 'Could not load image'}
     
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    size = codebook['image_size']
-    img = cv2.resize(img, (size, size))
+    img_size = codebook['image_size']
+    if isinstance(img_size, (list, tuple)):
+        target_h, target_w = int(img_size[0]), int(img_size[1])
+    else:
+        target_h = target_w = int(img_size)
+    img = cv2.resize(img, (target_w, target_h))
     img_f = img.astype(np.float32) / 255.0
     
     # Extract noise pattern
-    noise = np.zeros((size, size, 3))
+    noise = np.zeros((target_h, target_w, 3))
     for c in range(3):
         noise[:, :, c] = img_f[:, :, c] - wavelet_denoise(img_f[:, :, c])
     
@@ -266,7 +280,8 @@ def detect_synthid(image_path, codebook_path):
     magnitude = np.abs(fshift)
     phase = np.angle(fshift)
     
-    center = size // 2
+    center_y = target_h // 2
+    center_x = target_w // 2
     carrier_scores = []
     for carrier in codebook['carriers'][:20]:
         y, x = carrier['position']
@@ -322,7 +337,8 @@ if __name__ == '__main__':
     extract_parser.add_argument('image_dir', type=str, help='Directory with watermarked images')
     extract_parser.add_argument('--output', type=str, default='./synthid_codebook.pkl', help='Output path')
     extract_parser.add_argument('--max-images', type=int, default=250, help='Max images')
-    extract_parser.add_argument('--size', type=int, default=512, help='Image size')
+    extract_parser.add_argument('--size', type=int, default=None,
+                                help='Image size (default: auto-detect from images)')
     
     # Detect command
     detect_parser = subparsers.add_parser('detect', help='Detect watermark in image')
