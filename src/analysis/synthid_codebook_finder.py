@@ -39,7 +39,7 @@ class SynthIDCodebookFinder:
     across multiple AI-generated images.
     """
     
-    def __init__(self, target_size=(512, 512)):
+    def __init__(self, target_size=None):
         self.target_size = target_size
         self.n_images = 0
         
@@ -68,12 +68,14 @@ class SynthIDCodebookFinder:
         if img is None:
             return None
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = cv2.resize(img, self.target_size)
+        if self.target_size is not None:
+            img = cv2.resize(img, self.target_size)
         return img
     
     def extract_lsb_pattern(self, img: np.ndarray) -> np.ndarray:
         """Extract LSB (Least Significant Bit) pattern from all channels."""
-        lsb = np.zeros((self.target_size[1], self.target_size[0], 3), dtype=np.uint8)
+        h, w = img.shape[:2]
+        lsb = np.zeros((h, w, 3), dtype=np.uint8)
         for c in range(3):
             lsb[:, :, c] = img[:, :, c] & 1
         return lsb

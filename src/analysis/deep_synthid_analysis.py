@@ -38,11 +38,16 @@ def wavelet_denoise(channel, wavelet='db4', level=3):
     return denoised[:channel.shape[0], :channel.shape[1]]
 
 
-def load_images(image_dir, max_images=250, size=(512, 512)):
-    """Load all images."""
+def load_images(image_dir, max_images=250, size=None):
+    """Load all images.
+    
+    If size is None, uses native resolution of the first image and resizes
+    all subsequent images to match (ensuring consistent array shapes).
+    """
     extensions = {'.png', '.jpg', '.jpeg', '.webp'}
     images = []
     paths = []
+    native_size = None
     
     for fname in sorted(os.listdir(image_dir)):
         if os.path.splitext(fname)[1].lower() in extensions:
@@ -50,7 +55,13 @@ def load_images(image_dir, max_images=250, size=(512, 512)):
             img = cv2.imread(path)
             if img is not None:
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                img = cv2.resize(img, size)
+                if native_size is None:
+                    if size is not None:
+                        native_size = size
+                    else:
+                        # (width, height) for cv2.resize
+                        native_size = (img.shape[1], img.shape[0])
+                img = cv2.resize(img, native_size)
                 images.append(img)
                 paths.append(fname)
                 if len(images) >= max_images:
