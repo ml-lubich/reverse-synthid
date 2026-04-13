@@ -64,9 +64,15 @@ def make_source_image(color: str, size: int = 512) -> bytes:
 # ---------------------------------------------------------------------------
 
 ASPECT_RATIOS = {
+    "1:1":   (1024, 1024),  # square
     "9:16":  (1344, 768),   # portrait phone
+    "16:9":  (768, 1344),   # landscape phone
     "4:3":   (864, 1184),   # classic photo landscape
     "3:4":   (1184, 864),   # classic photo portrait
+    "2:3":   (1536, 1024),  # portrait standard
+    "3:2":   (1024, 1536),  # landscape standard
+    "1:2":   (2048, 1024),  # tall portrait
+    "2:1":   (1024, 2048),  # wide landscape
 }
 
 
